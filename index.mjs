@@ -11,110 +11,152 @@ app.use(express.urlencoded({ extended: true }));
 
 app.set('trust proxy', 1);
 app.use(session({
-  secret: 'cst336 csumb',
+  secret: process.env.SESSION_SECRET || 'cst336 csumb',
   resave: false,
-  saveUninitialized: true,
+  saveUninitialized: false,
   cookie: { secure: false }
 }));
 
 const pool = mysql.createPool({
-  host: '127.0.0.1',
-  user: 'root',
-  password: '1234',
-  database: 'lab7',
-  port: 3306,
+  host: process.env.DB_HOST || '127.0.0.1',
+  user: process.env.DB_USER || 'root',
+  password: process.env.DB_PASSWORD || '1234',
+  database: process.env.DB_NAME || 'lab7',
+  port: Number(process.env.DB_PORT) || 3306,
   waitForConnections: true,
   connectionLimit: 10,
-  queueLimit: 0
+  queueLimit: 0,
+  ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : undefined
 });
-
 
 (async () => {
   try {
     const conn = await pool.getConnection();
-    console.log("Connected to MySQL");
+    console.log('Connected to MySQL');
     conn.release();
   } catch (err) {
-    console.error("DB Connection Error:", err);
+    console.error('DB Connection Error:', err);
   }
 })();
 
 app.get('/', (req, res) => {
-  res.render('login.ejs');
+  res.render('login.ejs', { error: null });
 });
 
 app.get('/profile', isAuthenticated, (req, res) => {
-  res.render('profile.ejs', { "fullName": req.session.fullName });
+  res.render('profile.ejs', { fullName: req.session.fullName });
 });
 
 app.get('/home', isAuthenticated, (req, res) => {
-  res.render('home.ejs');
+  res.render('home.ejs', { fullName: req.session.fullName });
 });
 
 app.get('/logout', (req, res) => {
-  req.session.destroy();
-  res.redirect('/');
+  req.session.destroy(() => {
+    res.redirect('/');
+  });
 });
 
 app.post('/login', async (req, res) => {
-  let username = req.body.username;
-  let password = req.body.password;
-  let hashedPassword = "";
+  try {
+    const username = req.body.username;
+    const password = req.body.password;
 
-  let sql = `SELECT * FROM admin WHERE username = ?`;
+    const sql = `SELECT * FROM admin WHERE username = ?`;
+    const [rows] = await pool.query(sql, [username]);
 
-  const [rows] = await pool.query(sql, [username]);
+    if (rows.length === 0) {
+      return res.render('login.ejs', { error: 'Wrong credentials' });
+    }
 
-  if (rows.length > 0) {
-    hashedPassword = rows[0].password;
-  }
+    const match = await bcrypt.compare(password, rows[0].password);
 
-  const match = await bcrypt.compare(password, hashedPassword);
+    if (!match) {
+      return res.render('login.ejs', { error: 'Wrong credentials' });
+    }
 
-  if (match) {
     req.session.userAuthenticated = true;
-    req.session.fullName = rows[0].firstName + " " + rows[0].lastName;
-    res.render('home.ejs');
-  } else {
-    res.render('login.ejs', { "error": "Wrong credentials" });
+    req.session.fullName = `${rows[0].firstName} ${rows[0].lastName}`;
+    res.redirect('/home');
+  } catch (err) {
+    console.error(err);
+    res.render('login.ejs', { error: 'Login error' });
   }
 });
 
 app.get('/authors', isAuthenticated, async (req, res) => {
-  let sql = `SELECT authorId, firstName, lastName
-             FROM authors
-             ORDER BY lastName`;
-
-  const [rows] = await pool.query(sql);
-  res.render('authors.ejs', { rows });
+  try {
+    const sql = `SELECT authorId, firstName, lastName FROM authors ORDER BY lastName`;
+    const [rows] = await pool.query(sql);
+    res.render('authors.ejs', { rows });
+  } catch (err) {
+    console.error(err);
+    res.send('Error loading authors');
+  }
 });
 
 app.get('/editAuthor', isAuthenticated, async (req, res) => {
-  let authorId = req.query.authorId;
+  try {
+    const authorId = req.query.authorId;
+    const sql = `SELECT * FROM authors WHERE authorId = ?`;
+    const [authorInfo] = await pool.query(sql, [authorId]);
 
-  let sql = `SELECT * FROM authors WHERE authorId = ?`;
-  const [authorInfo] = await pool.query(sql, [authorId]);
+    if (authorInfo.length === 0) {
+      return res.redirect('/authors');
+    }
 
-  if (authorInfo[0].dob) {
-    authorInfo[0].dob = authorInfo[0].dob.toISOString().slice(0, 10);
+    if (authorInfo[0].dob) {
+      authorInfo[0].dob = authorInfo[0].dob.toISOString().slice(0, 10);
+    }
+
+    if (authorInfo[0].dod) {
+      authorInfo[0].dod = authorInfo[0].dod.toISOString().slice(0, 10);
+    }
+
+    res.render('editAuthor.ejs', { authorInfo });
+  } catch (err) {
+    console.error(err);
+    res.send('Error loading author');
   }
-  if (authorInfo[0].dod) {
-    authorInfo[0].dod = authorInfo[0].dod.toISOString().slice(0, 10);
-  }
-
-  res.render('editAuthor.ejs', { authorInfo });
 });
 
 app.post('/editAuthor', isAuthenticated, async (req, res) => {
-  let { authorId, firstName, lastName, country, dob, dod, profession, biography } = req.body;
+  try {
+    const {
+      authorId,
+      firstName,
+      lastName,
+      country,
+      dob,
+      dod,
+      profession,
+      biography,
+      sex,
+      portrait
+    } = req.body;
 
-  let sql = `UPDATE authors
-             SET firstName = ?, lastName = ?, country = ?, dob = ?, dod = ?, profession = ?, biography = ?
-             WHERE authorId = ?`;
+    const sql = `UPDATE authors
+                 SET firstName = ?, lastName = ?, country = ?, dob = ?, dod = ?, profession = ?, biography = ?, sex = ?, portrait = ?
+                 WHERE authorId = ?`;
 
-  await pool.query(sql, [firstName, lastName, country, dob, dod, profession, biography, authorId]);
+    await pool.query(sql, [
+      firstName,
+      lastName,
+      country,
+      dob || null,
+      dod || null,
+      profession,
+      biography,
+      sex || null,
+      portrait || null,
+      authorId
+    ]);
 
-  res.redirect('/authors');
+    res.redirect('/authors');
+  } catch (err) {
+    console.error(err);
+    res.send('Error updating author');
+  }
 });
 
 app.get('/addAuthor', isAuthenticated, (req, res) => {
@@ -122,95 +164,159 @@ app.get('/addAuthor', isAuthenticated, (req, res) => {
 });
 
 app.post('/addAuthor', isAuthenticated, async (req, res) => {
-  let { firstName, lastName, country, profession, dob, dod, sex, biography } = req.body;
+  try {
+    const {
+      firstName,
+      lastName,
+      country,
+      profession,
+      dob,
+      dod,
+      sex,
+      biography,
+      portrait
+    } = req.body;
 
-  let sql = `INSERT INTO authors
-             (firstName, lastName, country, profession, dob, dod, sex, biography)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`;
+    const sql = `INSERT INTO authors
+                 (firstName, lastName, country, profession, dob, dod, sex, biography, portrait)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
-  await pool.query(sql, [firstName, lastName, country, profession, dob, dod, sex, biography]);
+    await pool.query(sql, [
+      firstName,
+      lastName,
+      country,
+      profession,
+      dob || null,
+      dod || null,
+      sex || null,
+      biography,
+      portrait || null
+    ]);
 
-  res.redirect('/authors');
+    res.redirect('/authors');
+  } catch (err) {
+    console.error(err);
+    res.send('Error adding author');
+  }
 });
 
 app.get('/quotes', isAuthenticated, async (req, res) => {
-  let sql = `SELECT quoteId, quote FROM quotes ORDER BY quote`;
-  const [rows] = await pool.query(sql);
-
-  res.render('quotes.ejs', { rows });
+  try {
+    const sql = `SELECT quoteId, quote FROM quotes ORDER BY quote`;
+    const [rows] = await pool.query(sql);
+    res.render('quotes.ejs', { rows });
+  } catch (err) {
+    console.error(err);
+    res.send('Error loading quotes');
+  }
 });
 
 app.get('/editQuote', isAuthenticated, async (req, res) => {
-  let quoteId = req.query.quoteId;
+  try {
+    const quoteId = req.query.quoteId;
 
-  let sql = `SELECT * FROM quotes WHERE quoteId = ?`;
-  let authorsSql = `SELECT authorId, firstName, lastName FROM authors ORDER BY lastName`;
+    const sql = `SELECT * FROM quotes WHERE quoteId = ?`;
+    const authorsSql = `SELECT authorId, firstName, lastName FROM authors ORDER BY lastName`;
 
-  const [quoteInfo] = await pool.query(sql, [quoteId]);
-  const [authors] = await pool.query(authorsSql);
+    const [quoteInfo] = await pool.query(sql, [quoteId]);
+    const [authors] = await pool.query(authorsSql);
 
-  res.render('editQuote.ejs', { quoteInfo, authors });
+    if (quoteInfo.length === 0) {
+      return res.redirect('/quotes');
+    }
+
+    res.render('editQuote.ejs', { quoteInfo, authors });
+  } catch (err) {
+    console.error(err);
+    res.send('Error loading quote');
+  }
 });
 
 app.post('/editQuote', isAuthenticated, async (req, res) => {
-  let { quoteId, quote, authorId } = req.body;
+  try {
+    const { quoteId, quote, authorId, category } = req.body;
 
-  let sql = `UPDATE quotes SET quote = ?, authorId = ? WHERE quoteId = ?`;
-  await pool.query(sql, [quote, authorId, quoteId]);
+    const sql = `UPDATE quotes SET quote = ?, authorId = ?, category = ? WHERE quoteId = ?`;
+    await pool.query(sql, [quote, authorId, category || null, quoteId]);
 
-  res.redirect('/quotes');
+    res.redirect('/quotes');
+  } catch (err) {
+    console.error(err);
+    res.send('Error updating quote');
+  }
 });
 
 app.get('/addQuote', isAuthenticated, async (req, res) => {
-  let sql = `SELECT authorId, firstName, lastName FROM authors ORDER BY lastName`;
-  const [rows] = await pool.query(sql);
-
-  res.render('newQuote.ejs', { rows });
+  try {
+    const sql = `SELECT authorId, firstName, lastName FROM authors ORDER BY lastName`;
+    const [rows] = await pool.query(sql);
+    res.render('newQuote.ejs', { rows });
+  } catch (err) {
+    console.error(err);
+    res.send('Error loading quote form');
+  }
 });
 
 app.post('/addQuote', isAuthenticated, async (req, res) => {
-  let { quote, authorId, category } = req.body;
+  try {
+    const { quote, authorId, category } = req.body;
 
-  let sql = `INSERT INTO quotes (quote, authorId, category)
-             VALUES (?, ?, ?)`;
+    const sql = `INSERT INTO quotes (quote, authorId, category)
+                 VALUES (?, ?, ?)`;
 
-  await pool.query(sql, [quote, authorId, category]);
-
-  res.redirect('/quotes');
+    await pool.query(sql, [quote, authorId, category]);
+    res.redirect('/quotes');
+  } catch (err) {
+    console.error(err);
+    res.send('Error adding quote');
+  }
 });
 
 app.get('/deleteAuthor', isAuthenticated, async (req, res) => {
-  let authorId = req.query.authorId;
-
-  let sql = `DELETE FROM authors WHERE authorId = ?`;
-  await pool.query(sql, [authorId]);
-
-  res.redirect('/authors');
+  try {
+    const authorId = req.query.authorId;
+    await pool.query(`DELETE FROM quotes WHERE authorId = ?`, [authorId]);
+    await pool.query(`DELETE FROM authors WHERE authorId = ?`, [authorId]);
+    res.redirect('/authors');
+  } catch (err) {
+    console.error(err);
+    res.send('Error deleting author');
+  }
 });
 
 app.get('/deleteQuote', isAuthenticated, async (req, res) => {
-  let quoteId = req.query.quoteId;
-
-  let sql = `DELETE FROM quotes WHERE quoteId = ?`;
-  await pool.query(sql, [quoteId]);
-
-  res.redirect('/quotes');
+  try {
+    const quoteId = req.query.quoteId;
+    const sql = `DELETE FROM quotes WHERE quoteId = ?`;
+    await pool.query(sql, [quoteId]);
+    res.redirect('/quotes');
+  } catch (err) {
+    console.error(err);
+    res.send('Error deleting quote');
+  }
 });
 
-app.get("/dbTest", async (req, res) => {
-  let sql = "SELECT CURDATE()";
-  const [rows] = await pool.query(sql);
-  res.send(rows);
+app.get('/dbTest', async (req, res) => {
+  try {
+    const sql = 'SELECT CURDATE() AS today';
+    const [rows] = await pool.query(sql);
+    res.send(rows);
+  } catch (err) {
+    console.error(err);
+    res.send('DB test failed');
+  }
 });
 
 function isAuthenticated(req, res, next) {
   if (req.session.userAuthenticated) {
     next();
   } else {
-    res.redirect("/");
+    res.redirect('/');
   }
 }
 
-app.listen(3000, () => {
-  console.log("Express server running on http://localhost:3000");
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, () => {
+  console.log(`Express server running on http://localhost:${PORT}`);
 });
