@@ -17,15 +17,30 @@ app.use(session({
   cookie: { secure: false }
 }));
 
-const pool = process.env.DATABASE_URL
-  ? mysql.createPool(process.env.DATABASE_URL)
-  : mysql.createPool({
-      host: process.env.DB_HOST || '127.0.0.1',
-      user: process.env.DB_USER || 'root',
-      password: process.env.DB_PASSWORD || '1234',
-      database: process.env.DB_NAME || 'lab7',
-      port: Number(process.env.DB_PORT) || 3306
-    });
+let pool;
+
+if (process.env.DATABASE_URL) {
+  const url = new URL(process.env.DATABASE_URL);
+
+  pool = mysql.createPool({
+    host: url.hostname,
+    user: url.username,
+    password: url.password,
+    database: url.pathname.replace('/', ''),
+    port: Number(url.port),
+    ssl: {
+      rejectUnauthorized: false
+    }
+  });
+} else {
+  pool = mysql.createPool({
+    host: '127.0.0.1',
+    user: 'root',
+    password: '1234',
+    database: 'lab7',
+    port: 3306
+  });
+}
 
 (async () => {
   try {
@@ -101,10 +116,6 @@ app.get('/dbTest', async (req, res) => {
 });
 
 app.get('/', (req, res) => {
-  res.render('login.ejs', { error: null });
-});
-
-app.get('/login', (req, res) => {
   res.render('login.ejs', { error: null });
 });
 
