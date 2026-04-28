@@ -26,7 +26,12 @@ const pool = mysql.createPool({
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0,
-  ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : undefined
+  ssl: {
+    rejectUnauthorized: false
+  },
+  authPlugins: {
+    mysql_clear_password: () => () => Buffer.from(`${process.env.DB_PASSWORD || '1234'}\0`)
+  }
 });
 
 (async () => {
@@ -92,7 +97,21 @@ app.get('/setupDB', async (req, res) => {
   }
 });
 
+app.get('/dbTest', async (req, res) => {
+  try {
+    const [rows] = await pool.query('SELECT CURDATE() AS today, CURRENT_USER() AS currentUser, DATABASE() AS dbName');
+    res.send(rows);
+  } catch (err) {
+    console.error(err);
+    res.send(err.message);
+  }
+});
+
 app.get('/', (req, res) => {
+  res.render('login.ejs', { error: null });
+});
+
+app.get('/login', (req, res) => {
   res.render('login.ejs', { error: null });
 });
 
@@ -133,7 +152,7 @@ app.post('/login', async (req, res) => {
     res.redirect('/home');
   } catch (err) {
     console.error(err);
-    res.render('login.ejs', { error: 'Login error' });
+    res.render('login.ejs', { error: err.message });
   }
 });
 
@@ -346,17 +365,6 @@ app.get('/deleteQuote', isAuthenticated, async (req, res) => {
   } catch (err) {
     console.error(err);
     res.send('Error deleting quote');
-  }
-});
-
-app.get('/dbTest', async (req, res) => {
-  try {
-    const sql = 'SELECT CURDATE() AS today';
-    const [rows] = await pool.query(sql);
-    res.send(rows);
-  } catch (err) {
-    console.error(err);
-    res.send('DB test failed');
   }
 });
 
