@@ -17,23 +17,10 @@ app.use(session({
   cookie: { secure: false }
 }));
 
-const pool = mysql.createPool({
-  host: process.env.DB_HOST || '127.0.0.1',
-  user: process.env.DB_USER || 'root',
-  password: process.env.DB_PASSWORD || '1234',
-  database: process.env.DB_NAME || 'lab7',
-  port: Number(process.env.DB_PORT) || 3306,
-  waitForConnections: true,
-  connectionLimit: 10,
-  queueLimit: 0,
-  ssl: {
-    rejectUnauthorized: false
-  },
-  authPlugins: {
-    mysql_clear_password: () => () => Buffer.from(`${process.env.DB_PASSWORD || '1234'}\0`)
-  }
-});
+// ✅ USE DATABASE_URL (THIS IS THE FIX)
+const pool = mysql.createPool(process.env.DATABASE_URL);
 
+// Test connection
 (async () => {
   try {
     const conn = await pool.getConnection();
@@ -44,6 +31,7 @@ const pool = mysql.createPool({
   }
 })();
 
+// Setup database
 app.get('/setupDB', async (req, res) => {
   try {
     await pool.query(`
@@ -97,9 +85,12 @@ app.get('/setupDB', async (req, res) => {
   }
 });
 
+// Test DB
 app.get('/dbTest', async (req, res) => {
   try {
-    const [rows] = await pool.query('SELECT CURDATE() AS today, CURRENT_USER() AS currentUser, DATABASE() AS dbName');
+    const [rows] = await pool.query(
+      'SELECT CURDATE() AS today, CURRENT_USER() AS user, DATABASE() AS db'
+    );
     res.send(rows);
   } catch (err) {
     console.error(err);
@@ -131,11 +122,12 @@ app.get('/logout', (req, res) => {
 
 app.post('/login', async (req, res) => {
   try {
-    const username = req.body.username;
-    const password = req.body.password;
+    const { username, password } = req.body;
 
-    const sql = `SELECT * FROM admin WHERE username = ?`;
-    const [rows] = await pool.query(sql, [username]);
+    const [rows] = await pool.query(
+      `SELECT * FROM admin WHERE username = ?`,
+      [username]
+    );
 
     if (rows.length === 0) {
       return res.render('login.ejs', { error: 'Wrong credentials' });
@@ -149,6 +141,7 @@ app.post('/login', async (req, res) => {
 
     req.session.userAuthenticated = true;
     req.session.fullName = `${rows[0].firstName} ${rows[0].lastName}`;
+
     res.redirect('/home');
   } catch (err) {
     console.error(err);
@@ -157,78 +150,10 @@ app.post('/login', async (req, res) => {
 });
 
 app.get('/authors', isAuthenticated, async (req, res) => {
-  try {
-    const sql = `SELECT authorId, firstName, lastName FROM authors ORDER BY lastName`;
-    const [rows] = await pool.query(sql);
-    res.render('authors.ejs', { rows });
-  } catch (err) {
-    console.error(err);
-    res.send('Error loading authors');
-  }
-});
-
-app.get('/editAuthor', isAuthenticated, async (req, res) => {
-  try {
-    const authorId = req.query.authorId;
-    const sql = `SELECT * FROM authors WHERE authorId = ?`;
-    const [authorInfo] = await pool.query(sql, [authorId]);
-
-    if (authorInfo.length === 0) {
-      return res.redirect('/authors');
-    }
-
-    if (authorInfo[0].dob) {
-      authorInfo[0].dob = authorInfo[0].dob.toISOString().slice(0, 10);
-    }
-
-    if (authorInfo[0].dod) {
-      authorInfo[0].dod = authorInfo[0].dod.toISOString().slice(0, 10);
-    }
-
-    res.render('editAuthor.ejs', { authorInfo });
-  } catch (err) {
-    console.error(err);
-    res.send('Error loading author');
-  }
-});
-
-app.post('/editAuthor', isAuthenticated, async (req, res) => {
-  try {
-    const {
-      authorId,
-      firstName,
-      lastName,
-      country,
-      dob,
-      dod,
-      profession,
-      biography,
-      sex,
-      portrait
-    } = req.body;
-
-    const sql = `UPDATE authors
-                 SET firstName = ?, lastName = ?, country = ?, dob = ?, dod = ?, profession = ?, biography = ?, sex = ?, portrait = ?
-                 WHERE authorId = ?`;
-
-    await pool.query(sql, [
-      firstName,
-      lastName,
-      country,
-      dob || null,
-      dod || null,
-      profession,
-      biography,
-      sex || null,
-      portrait || null,
-      authorId
-    ]);
-
-    res.redirect('/authors');
-  } catch (err) {
-    console.error(err);
-    res.send('Error updating author');
-  }
+  const [rows] = await pool.query(
+    `SELECT authorId, firstName, lastName FROM authors ORDER BY lastName`
+  );
+  res.render('authors.ejs', { rows });
 });
 
 app.get('/addAuthor', isAuthenticated, (req, res) => {
@@ -236,24 +161,23 @@ app.get('/addAuthor', isAuthenticated, (req, res) => {
 });
 
 app.post('/addAuthor', isAuthenticated, async (req, res) => {
-  try {
-    const {
-      firstName,
-      lastName,
-      country,
-      profession,
-      dob,
-      dod,
-      sex,
-      biography,
-      portrait
-    } = req.body;
+  const {
+    firstName,
+    lastName,
+    country,
+    profession,
+    dob,
+    dod,
+    sex,
+    biography,
+    portrait
+  } = req.body;
 
-    const sql = `INSERT INTO authors
-                 (firstName, lastName, country, profession, dob, dod, sex, biography, portrait)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`;
-
-    await pool.query(sql, [
+  await pool.query(
+    `INSERT INTO authors
+     (firstName, lastName, country, profession, dob, dod, sex, biography, portrait)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
       firstName,
       lastName,
       country,
@@ -263,109 +187,53 @@ app.post('/addAuthor', isAuthenticated, async (req, res) => {
       sex || null,
       biography,
       portrait || null
-    ]);
+    ]
+  );
 
-    res.redirect('/authors');
-  } catch (err) {
-    console.error(err);
-    res.send('Error adding author');
-  }
+  res.redirect('/authors');
 });
 
 app.get('/quotes', isAuthenticated, async (req, res) => {
-  try {
-    const sql = `SELECT quoteId, quote FROM quotes ORDER BY quote`;
-    const [rows] = await pool.query(sql);
-    res.render('quotes.ejs', { rows });
-  } catch (err) {
-    console.error(err);
-    res.send('Error loading quotes');
-  }
-});
-
-app.get('/editQuote', isAuthenticated, async (req, res) => {
-  try {
-    const quoteId = req.query.quoteId;
-
-    const sql = `SELECT * FROM quotes WHERE quoteId = ?`;
-    const authorsSql = `SELECT authorId, firstName, lastName FROM authors ORDER BY lastName`;
-
-    const [quoteInfo] = await pool.query(sql, [quoteId]);
-    const [authors] = await pool.query(authorsSql);
-
-    if (quoteInfo.length === 0) {
-      return res.redirect('/quotes');
-    }
-
-    res.render('editQuote.ejs', { quoteInfo, authors });
-  } catch (err) {
-    console.error(err);
-    res.send('Error loading quote');
-  }
-});
-
-app.post('/editQuote', isAuthenticated, async (req, res) => {
-  try {
-    const { quoteId, quote, authorId, category } = req.body;
-
-    const sql = `UPDATE quotes SET quote = ?, authorId = ?, category = ? WHERE quoteId = ?`;
-    await pool.query(sql, [quote, authorId, category || null, quoteId]);
-
-    res.redirect('/quotes');
-  } catch (err) {
-    console.error(err);
-    res.send('Error updating quote');
-  }
+  const [rows] = await pool.query(
+    `SELECT quoteId, quote FROM quotes ORDER BY quote`
+  );
+  res.render('quotes.ejs', { rows });
 });
 
 app.get('/addQuote', isAuthenticated, async (req, res) => {
-  try {
-    const sql = `SELECT authorId, firstName, lastName FROM authors ORDER BY lastName`;
-    const [rows] = await pool.query(sql);
-    res.render('newQuote.ejs', { rows });
-  } catch (err) {
-    console.error(err);
-    res.send('Error loading quote form');
-  }
+  const [rows] = await pool.query(
+    `SELECT authorId, firstName, lastName FROM authors ORDER BY lastName`
+  );
+  res.render('newQuote.ejs', { rows });
 });
 
 app.post('/addQuote', isAuthenticated, async (req, res) => {
-  try {
-    const { quote, authorId, category } = req.body;
+  const { quote, authorId, category } = req.body;
 
-    const sql = `INSERT INTO quotes (quote, authorId, category)
-                 VALUES (?, ?, ?)`;
+  await pool.query(
+    `INSERT INTO quotes (quote, authorId, category)
+     VALUES (?, ?, ?)`,
+    [quote, authorId, category]
+  );
 
-    await pool.query(sql, [quote, authorId, category]);
-    res.redirect('/quotes');
-  } catch (err) {
-    console.error(err);
-    res.send('Error adding quote');
-  }
+  res.redirect('/quotes');
 });
 
 app.get('/deleteAuthor', isAuthenticated, async (req, res) => {
-  try {
-    const authorId = req.query.authorId;
-    await pool.query(`DELETE FROM quotes WHERE authorId = ?`, [authorId]);
-    await pool.query(`DELETE FROM authors WHERE authorId = ?`, [authorId]);
-    res.redirect('/authors');
-  } catch (err) {
-    console.error(err);
-    res.send('Error deleting author');
-  }
+  const authorId = req.query.authorId;
+
+  await pool.query(`DELETE FROM quotes WHERE authorId = ?`, [authorId]);
+  await pool.query(`DELETE FROM authors WHERE authorId = ?`, [authorId]);
+
+  res.redirect('/authors');
 });
 
 app.get('/deleteQuote', isAuthenticated, async (req, res) => {
-  try {
-    const quoteId = req.query.quoteId;
-    const sql = `DELETE FROM quotes WHERE quoteId = ?`;
-    await pool.query(sql, [quoteId]);
-    res.redirect('/quotes');
-  } catch (err) {
-    console.error(err);
-    res.send('Error deleting quote');
-  }
+  const quoteId = req.query.quoteId;
+
+  await pool.query(`DELETE FROM quotes WHERE quoteId = ?`, [quoteId]);
+
+  res.redirect('/quotes');
 });
 
 function isAuthenticated(req, res, next) {
@@ -379,5 +247,5 @@ function isAuthenticated(req, res, next) {
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
-  console.log(`Express server running on http://localhost:${PORT}`);
+  console.log(`Server running on port ${PORT}`);
 });
