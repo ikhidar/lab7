@@ -39,6 +39,59 @@ const pool = mysql.createPool({
   }
 })();
 
+app.get('/setupDB', async (req, res) => {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS admin (
+        adminId INT AUTO_INCREMENT PRIMARY KEY,
+        firstName VARCHAR(50),
+        lastName VARCHAR(50),
+        username VARCHAR(50) UNIQUE,
+        password VARCHAR(255)
+      )
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS authors (
+        authorId INT AUTO_INCREMENT PRIMARY KEY,
+        firstName VARCHAR(50),
+        lastName VARCHAR(50),
+        dob DATE,
+        dod DATE,
+        sex VARCHAR(10),
+        profession VARCHAR(50),
+        country VARCHAR(50),
+        portrait TEXT,
+        biography TEXT
+      )
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS quotes (
+        quoteId INT AUTO_INCREMENT PRIMARY KEY,
+        quote TEXT,
+        authorId INT,
+        category VARCHAR(50)
+      )
+    `);
+
+    await pool.query(`DELETE FROM admin WHERE username = ?`, ['admin']);
+
+    const hashedPassword = await bcrypt.hash('s3cr3t', 10);
+
+    await pool.query(
+      `INSERT INTO admin (firstName, lastName, username, password)
+       VALUES (?, ?, ?, ?)`,
+      ['Admin', 'User', 'admin', hashedPassword]
+    );
+
+    res.send('Database setup complete!');
+  } catch (err) {
+    console.error(err);
+    res.send(err.message);
+  }
+});
+
 app.get('/', (req, res) => {
   res.render('login.ejs', { error: null });
 });
